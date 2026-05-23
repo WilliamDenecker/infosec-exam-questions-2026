@@ -173,3 +173,34 @@ User authentication to the messaging server: SHA-512 + challenge-response (ch3.1
 
 _Status: Complete_  
 _Done by: William_
+
+---
+
+### Clarification — Post-Compromise Security and the SHA-512 Ratchet
+
+**Question raised**: if an attacker compromises K_group_current, can they keep computing K_group_new, K_group_new+1, ... and read all future messages indefinitely?
+
+**Answer: yes — with a pure SHA-512 ratchet, they can.**
+
+SHA-512 is a public algorithm. The ratchet formula:
+
+```
+K_group_new = SHA-512(K_group_current || counter)
+```
+
+is deterministic and known to everyone. An attacker who captures K_group_current can compute every future key in the chain indefinitely. The SHA-512 ratchet alone therefore provides **forward secrecy** (cannot go backwards — SHA-512 is preimage-resistant) but **not post-compromise security** (can go forwards — SHA-512 is not secret).
+
+**What is actually required for post-compromise security?**
+
+True post-compromise security requires periodically injecting **fresh secret material** that the attacker does not have. This is what Signal's Double Ratchet protocol achieves by combining two ratchets:
+
+1. **Symmetric ratchet** (SHA-512 chain) — efficient, provides forward secrecy between messages.
+2. **DH ratchet** (periodic ECDHE exchange) — each party generates a new ephemeral keypair; the new chain key is derived from both the old chain and the fresh ECDHE output. Since the attacker does not have the new ephemeral private key, they cannot follow the ratchet forward after this point.
+
+```
+After a DH ratchet step:
+K_group_new = SHA-512(K_group_current || ECDHE(my_new_ephemeral, their_new_ephemeral))
+                                         ↑ fresh secret the attacker cannot compute
+```
+
+**Implication for this design**: Part 5 of this answer oversimplifies the post-compromise security claim. The SHA-512 ratchet alone heals against going *backwards* (forward secrecy) but not against going *forwards* after a compromise. To fully satisfy post-compromise security, periodic ECDHE ratchet steps must be incorporated — triggered, for example, on each member's first message after receiving a new message from another member.

@@ -144,6 +144,9 @@ the sequence will reveal a non-trivial factor.
 
 This means the expected number of random guesses needed to successfully factor $n$ is only about 2 tries.
 
-## Source
+### Sources
 
-This result is briefly mentioned on slide 18 of the chapter *“Asymmetric Encryption”*. However, the full derivation and step-by-step explanation of the method were worked out in detail during the lecture (this is mentioned here).
+- IS_UG_2_2_3_SecM_HashMac (p.77–85: RSA algorithm, $\phi(n)$, private key definition, Euler's theorem; p.18: factoring from private key — mentioned in lecture)
+
+_Status: Complete_  
+_Done by: William_
