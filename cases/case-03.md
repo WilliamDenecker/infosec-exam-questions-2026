@@ -8,78 +8,104 @@ Design the architecture for a regional/national healthcare data exchange system.
 
 ## Answer
 
-### Most essential security services
-1. **Confidentiality**: healthcare data is very sensitive and should be only known to the patient and his healthcare provider (doctor etc.).
-2. **Data integrity**: data abouth health should not be added/altered/deleted by an unauthorised person. 
-3. **Data availability**: medical data could be needed in critical situations so this data data should always be always available and easy accessible.
-4. **Authentication and Access Control**: Only people with legitimate reasons to view certain medical data should be allowed to (with authorisation). 
-5. **Non-repudiation**: Data access should be logged. This logs should also be available to the patients (to see who has accessed their data). This is used in current platforms like COZO. 
+### Part 1 — Most Essential Security Services (ch1 p.10)
 
-### Security mechanisms to implement
-**Confidentiality**  
-- All data encrypted at rest: AES-256-GCM.
-- Keys in Hardware Security Module
-    * Keys never leave dedicated hardware. 
-    * App requests hardware to do key operations.
-    * Rotated periodically (replace old keys with new ones)
-- All data in transit: TLS 1.3 (AES-256-GCM, ECDHE)
-    * Same reasoning as case-02. 
-- Level-encryption: medical information is encrypted in parts in stead of as a whole.
-    * Not all information disclosed all together.
-    * Allows to implement a role-based system where certain users have access to certain parts of the data. 
+| Service | Required? | Slide | Why it is needed | What breaks without it |
+|---|---|---|---|---|
+| **Confidentiality** | Yes — critical | ch1 p.15 | Patient records are among the most sensitive personal data. Unauthorised disclosure cannot be undone (ch1 p.5). An ISP employee or attacker must not be able to read medical records. | Any breach of the system exposes irreversibly sensitive data. GDPR violations, patient harm from disclosed conditions. |
+| **Authentication** | Yes — critical | ch1 p.22 | Every user (patient or professional) must be verified before any data is revealed. Both entity authentication (who is this person?) and data-origin authentication (who created this record?) apply. | A GP could impersonate a cardiologist; an attacker could impersonate any professional to access all records. |
+| **Access control / authorisation** | Yes — critical | ch1 p.30 | A GP must not read psychiatric records; a lab must not read surgical notes. Clearance must be enforced by the system, not by trust. | Professionals access records they have no legitimate reason to see — insider threat, privacy violation, GDPR Art. 9 breach. |
+| **Data integrity** | Yes — critical | ch1 p.34 | A tampered lab result or modified dosage can harm or kill a patient. Nothing may be added, deleted, or modified without detection. | A malicious or compromised system silently alters a blood type, allergy note, or medication dosage — patient harm. |
+| **Non-repudiation** | Yes | ch1 p.40 | Every data access and every record modification must be attributable to a specific professional. They cannot deny having accessed or issued data. | A professional can deny falsifying a record; audit trail is worthless without cryptographic attribution. |
+| **Availability** | Yes | ch1 p.42 | Medical data may be needed in emergencies. Downtime directly endangers lives — a treating physician without access to allergy information may administer a fatal dose. | Emergency treatment delayed or incorrectly administered due to inaccessible records. |
 
-**Integrity**  
-- All records digitally signed by the issuing party (hospital, lab, doctor) using Ed25519.
-    * Proves who signed the data.
-    * Proves that the data is not altered.
-    * Uses small keys -> faster, more efficient
-- Any modification to a record creates a new signed version but the original is never overwritten
+### Part 2 — Transport Security
 
-**Authentication and Access Control**
-- To start using the application, a user have to authenticate itself using eID. 
-- Health care providers can access the platform with eID together with their RIZIV number (registry of licensed professionals). Nightly sync with RIZIV should be implemented to immediately block accounts of revoked licenses.
-- When the user wants to use the application (after registration), he has to login with biometric authentication or a pincode. 
-- Session stops after short time period (re-login). 
-- To implement extra security, a user needs to reverify with MFA/eID after a certain amount of time. 
-- Normal user should have a read-only version but should be able to rectify certain data (see legal aspects). This view should be limited and adapted (user-friendly in stead of just raw lab results).
-- Role-based (only allowed to look at certain data) with referalls if needed.
+Use **TLS 1.3** (ch3.6 p.7–8) for all connections between clients (portals, EHR systems) and the central platform. TLS is application-independent — the same layer secures both the professional portal and the patient portal without changes to the application (ch3.6 p.5).
 
-**Non-repudiation**
-- Tamper-evident audit logs: cryptographically chained, append only.
+**Cipher suite**: `TLS_AES_256_GCM_SHA384` with **ECDHE** key exchange (ch3.6 p.18) → forward secrecy: compromise of the server's long-term key does not expose past sessions (ch3.6 p.37). AES-256-GCM is an AEAD mode (ch3.6 p.13) providing confidentiality and integrity in one pass.
 
-### Legal aspects
-- If certain medical data wants to be used in certain (scientific) research, the owner first have to give an informed consent to do so. 
-- User has to give an informed consent to all care providers that want to see the data.
-- User should be able to revoke all stored data. 
-- User should be able to allow/deny certain users to view the data.
-- User should be able to deny sharing certain data (even after earlier consent).
-- GDPR: Right to view/correct data, right to file a complaint, ...
-- Breach notification 
+**Why TLS 1.3 over 1.2?** TLS 1.2 allows CBC-mode AES (vulnerable to padding oracle attacks) and static RSA key exchange (no forward secrecy). TLS 1.3 removes all legacy algorithms and mandates forward secrecy for every session (ch3.6 p.37).
 
-**System Security**
-- Endpoint Protection Platform on all medical devices.
-- Behaviour based identification of malware.
-- Keep malware definition files up-to-date.
-- Timely patch known vulnerabilities.
-- Antivirus.
-- Firewall: whitelist only necessary ports, separate network zones portal / professional tier / database tier,  no direct internet access to database.
-- Web application firewall in front of the patient/care provider's portal that inspects and filters authorized but malicious traffic.
-- Rule-based detection (IDS): anomaly detection, penetration identification, ...
+### Part 3 — Data Confidentiality at Rest
 
-### Remaining Vulnerabilities
-- Insider threats (legitimate doctor abusing access). 
-- Endpoint compromise (malware on workstation bypasses TLS/MFA) -> EPP!
-- Social engineering / phishing targeting staff -> educate people!
-- DDoS, national system is high-value target.
-- HSM misconfiguration. 
+All stored records are encrypted with **AES-256-GCM** (ch2.2.3 p.70–75). Record-level encryption (each record encrypted separately) enables role-based access: a user receives only the decryption key for records they are authorised to read, not a single database-wide key.
+
+**Why AES-256 over AES-128?** Against quantum adversaries (Grover's algorithm halves key strength), AES-256 retains 128-bit effective security; AES-128 drops to 64 bits — obsolete (ch2 PQCrypto p.16). For a healthcare system storing data for decades, 256-bit is the only defensible choice.
+
+### Part 4 — Data Integrity and Non-Repudiation
+
+Every record created or modified by a healthcare professional is **digitally signed**. The signing algorithm is **ECDSA with P-256** (ch2.2.3 p.85–87), providing 128-bit security with compact 64-byte signatures. The professional's signing key is bound to their identity via an **X.509 certificate** issued by a national healthcare CA (ch3.2 p.28–29, ch3.1 p.19).
+
+**Process**: `SHA-256(record)` → sign with professional's ECDSA private key → store signature alongside record. Any modification invalidates the signature (integrity, ch1 p.34). The signature ties the record to its issuer (non-repudiation, ch1 p.40).
+
+**Why ECDSA P-256 over Ed25519?** Ed25519 is not covered in the slides. The slides explicitly cover ECDSA with ECC curves (ch2.2.3 p.85–87). ECDSA P-256 provides equivalent security and is widely standardised in existing healthcare PKI.
+
+**Why ECDSA over RSA signatures?** RSA-2048 achieves equivalent security but with 256-byte signatures vs 64 bytes for ECDSA P-256. On a system signing every record access and modification, the size difference is significant (ch2.2.3 p.85–87).
+
+Modifications do not overwrite the original: each change creates a new signed version. This provides a tamper-evident audit history.
+
+### Part 5 — Authentication and Access Control
+
+**Healthcare professionals** authenticate with a two-factor mechanism:
+- Their government-issued X.509 certificate (ch3.2 p.28) — linked to their professional licence number (RIZIV). Proves identity.
+- A PIN or biometric unlocks the private key stored on their smart card.
+
+Before any login is accepted, the system checks the certificate against the CA's **Certificate Revocation List (CRL)** (ch3.2 p.50–53). Nightly synchronisation with the professional registry immediately revokes certificates of professionals whose licence has lapsed.
+
+**Why X.509 certificates over passwords?** Passwords authenticate a device claim; X.509 certificates carry attributes (professional role, licence number, clearance) verifiable by the CA (ch3.2 p.28). A stolen password gives full access; a stolen certificate without the smart card PIN is useless.
+
+**Patients** authenticate with their national eID card (also X.509 certificate, ch3.2 p.28). Strong identity assurance without bespoke credential infrastructure.
+
+**Access control** (ch1 p.30) is role-based: a GP reads general records; a cardiologist accesses cardiology data; a patient reads their own records read-only. The patient can grant or revoke specific professionals' access to specific record categories (GDPR requirement). Role assignment is managed by the CA/directory, not editable by individual users.
+
+### Part 6 — System Security
+
+**Packet filter firewall** (ch3.7 p.47, p.51): permit only port 443 (HTTPS) inbound. Separate into three network zones — patient/professional portal (internet-facing), application layer, and database layer — with packet filters between each. The database is never directly reachable from the internet (ch3.7 p.46 — minimise attack surface).
+
+**Why a DMZ architecture?** A single flat network means a compromise of the web portal immediately grants database access. With zone separation, an attacker who compromises the portal server still faces a second packet filter before reaching patient data (ch3.7 p.47).
+
+**Application-level gateway (proxy)** in front of portals (ch3.7 p.62–65): inspects full HTTP requests, enforces authentication before forwarding, blocks malformed requests before they reach the application. Unlike a packet filter, the proxy understands HTTP semantics and can block attacks like SQL injection in request parameters.
+
+**EPP and EDR** on all servers (ch3.7 p.38–43): signature-based and behaviour-based malware detection. Timely patching of all OS and middleware.
+
+**IDS** (ch3.7 p.77, p.83, p.85, p.96): threshold detection for anomalous access (a professional downloading thousands of records outside working hours triggers alert, ch3.7 p.85). Retain audit logs long enough for retroactive investigation (ch3.7 p.96). All record accesses logged with timestamp, user identity, and record identifier — append-only logs.
+
+### Part 7 — Legal Aspects
+
+- **GDPR Art. 9**: medical records are special category data (health data). Processing requires explicit informed consent or a legal basis (treatment). Patients have the right to view (implemented via patient portal), rectify, object, and request erasure of data not required for ongoing treatment.
+- **Purpose limitation**: records collected for treatment may not be used for research without separate informed consent. The access control system enforces this.
+- **Breach notification**: a breach affecting patient data must be notified to the DPA within 72 hours (GDPR Art. 33) and to affected patients if the risk is high (Art. 34).
+- **Data minimisation**: role-based access control and record-level encryption ensure professionals see only the data needed for the specific treatment context.
+
+### Part 8 — Remaining Vulnerabilities
+
+- **Insider threat**: a legitimate professional can access authorised records for illegitimate purposes (curiosity, insurance fraud). IDS (ch3.7 p.77) and audit logs (ch3.7 p.83) provide deterrence and retroactive detection, but cannot prevent access in real time.
+- **Endpoint compromise**: malware on a professional's workstation captures decrypted data after the TLS and application layers have processed it. EPP (ch3.7 p.43) reduces but does not eliminate this risk.
+- **CRL staleness**: if revocation checking fails open (network error), a revoked certificate may still be accepted. The system must fail closed — deny access if CRL is unreachable.
+- **Availability / DDoS**: a national healthcare platform is a high-value target for disruption. Redundancy and traffic scrubbing are required; this is a residual architectural risk.
+
+### Part 9 — Summary of Design Choices
+
+| Component | Chosen Solution | Slide reference | Why better than alternatives |
+|---|---|---|---|
+| Transport | TLS 1.3, AES-256-GCM-SHA384, ECDHE | ch3.6 p.7–8, p.18, p.37 | Mandatory forward secrecy; AEAD; no legacy algorithms |
+| Data at rest | AES-256-GCM per record | ch2.2.3 p.70–75; ch2 PQCrypto p.16 | Record-level enables role-based key access; AES-256 quantum-safe |
+| Integrity + non-repudiation | ECDSA P-256 signature per record | ch2.2.3 p.85–87 | Compact signatures; provable attribution; any modification detectable |
+| Identity | X.509 certificates from healthcare CA | ch3.2 p.28–29, ch3.1 p.19 | Carries professional attributes (role, licence); cryptographically verified |
+| Access control | Role-based, certificate attribute driven | ch1 p.30 | System-enforced; cannot accidentally grant wrong access |
+| Network | DMZ + packet filter + application proxy | ch3.7 p.47, p.51, p.62–65 | Layered defence; proxy catches semantic attacks packet filter misses |
 
 ### Sources
-- <https://www.cozo.be/privacyverklaring>
-- <https://www.uzgent.be/sites/default/files/documents/CoZo_leidraadIC.pdf>
-- 2024_Information_Security_Exam_Questions_GVdV (3.23)
-- Questions_Martijn_Hendrik - cases (case 20)
-- IS_UG_3_7_Appl_System (notes)
-- Claude-AI for further insights. 
 
-_Status: almost complete_  
-_Done by: Hann1bal20_
+- IS_UG_1_Introduction (p.5, p.10, p.15, p.22, p.30, p.34, p.40, p.42)
+- IS_UG_2_2_1_SecM_SymmEncr (p.55)
+- IS_UG_2_2_3_SecM_HashMac (p.24–32, p.70–75, p.85–87)
+- IS_UG_2_2_SecM-adv-PQCrypto (p.16)
+- IS_UG_3_1_Appl_Basics (p.16–22)
+- IS_UG_3_2_Appl_AuthMeth (p.11, p.28–29, p.50–53)
+- IS_UG_3_6_Appl_TLS (p.5, p.7–8, p.13, p.18, p.37)
+- IS_UG_3_7_Appl_System (p.38–43, p.46–47, p.51, p.62–65, p.77, p.83, p.85, p.96)
+
+_Status: Complete_  
+_Done by: William_

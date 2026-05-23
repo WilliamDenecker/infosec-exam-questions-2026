@@ -1,4 +1,4 @@
-# Case 6
+﻿# Case 6
 
 A company implements two-factor authentication (2FA) for access to its servers (e.g. mail server). This 2FA relies on a password (first factor) and an authenticator app (second factor) installed on a mobile device (e.g. a smartphone). When the user opens the authenticator app, it shows a 6-digit code, which is refreshed every minute.
 
@@ -14,4 +14,109 @@ When the user requests access to the company server from his PC, the user will e
 
 ## Answer
 
-TODO
+### Part 1 — Required Security Services (ch1 p.10)
+
+| Service | Required? | Slide | Why it is needed | What breaks without it |
+|---|---|---|---|---|
+| **Authentication** | Yes — critical | ch1 p.22 | The server must verify that the entity logging in is the legitimate user, not an attacker with a stolen password. Two independent factors make this harder to bypass. | A stolen password alone gives full access. Single-factor auth is the leading cause of account compromise. |
+| **Confidentiality** | Yes | ch1 p.15 | The password and OTP code in transit must not be readable by any network observer. | An eavesdropper captures credentials from the unencrypted channel and logs in immediately. |
+| **Data integrity** | Yes | ch1 p.34 | The login exchange must not be modifiable in transit — an attacker must not be able to substitute a valid code observed on one connection into a different session. | A man-in-the-middle substitutes credentials from one session into another. |
+| **Availability** | Yes | ch1 p.42 | Legitimate employees must be able to reach the mail server when needed. Excessive lockout or clock drift rejecting valid codes impairs operations. | Employees cannot access their email during a business-critical period due to system malfunction. |
+
+### Part 2 — Protocol Design
+
+#### Part 2.1 — Setup (Enrolment — One Time)
+
+The server generates a random **128-bit secret key K** for the user. K is the shared HMAC secret between the server and the user's authenticator app. K is delivered to the phone **out-of-band during enrolment** — displayed as a QR code over a **TLS 1.3** protected HTTPS session (ch3.6 p.7–8). After enrolment, both the server and the app independently hold K. **K never crosses the network after this point.**
+
+The user's login password is stored on the server as `SHA-512(salt || password)` with a per-user random salt of at least 96 bits (ch3.2 p.11). The salt defeats rainbow table attacks — without it, two users with the same password produce the same hash (ch3.2 p.10).
+
+#### Part 2.2 — Code Generation
+
+Each minute, both the authenticator app and the server independently compute the same time-based one-time code:
+
+```
+T = floor(current_unix_timestamp / 60)    // time window index
+code = truncate(HMAC-SHA256(K, T), 6 digits)
+```
+
+**HMAC-SHA256** (ch2.2.3 p.63–66) with:
+- `K` — shared secret binds the code to this specific user's device
+- `T` — timestamp index ensures freshness (ch3.1 p.3): old codes are automatically invalid when T advances
+
+**Why HMAC-SHA256 over a plain SHA hash?** A plain hash `SHA-256(K || T)` is vulnerable to length-extension attacks. HMAC is specifically designed for message authentication with a secret key and is not susceptible to length extension (ch2.2.3 p.63–66).
+
+The server validates both window T (current) and T-1 (immediately previous) — this tolerates up to one minute of clock skew between phone and server while keeping the window narrow enough that replay is impractical.
+
+#### Part 2.3 — Login Protocol
+
+All steps occur over **TLS 1.3** (ch3.6 p.5, p.7–8) with `TLS_AES_256_GCM_SHA384` and ECDHE (ch3.6 p.18) for forward secrecy (ch3.6 p.37):
+
+```
+Step 1 — Client → Server:   username
+Step 2 — Server → Client:   password prompt
+Step 3 — Client → Server:   password (in plaintext within TLS tunnel)
+Step 4 — Server:            computes SHA-512(stored_salt || password),
+                            compares to stored hash (ch3.2 p.11).
+                            Match → proceed. No match → reject.
+                            After threshold failures → account lockout (ch3.7 p.85).
+Step 5 — Server → Client:   prompt for 6-digit TOTP code
+Step 6 — Client → Server:   code (typed from authenticator app)
+Step 7 — Server:            independently computes HMAC-SHA256(K, T) and
+                            HMAC-SHA256(K, T-1), truncates to 6 digits.
+                            If received code matches either → access granted.
+                            Otherwise → reject.
+Step 8 — Server → Client:   session token (within TLS session).
+```
+
+The password and the TOTP code are **two independent factors**: factor 1 (something you know — password) and factor 2 (something you have — the phone with K). An attacker must compromise both simultaneously.
+
+### Part 3 — Improvements Over Password-Only Authentication
+
+**1. Two independent factors** (ch3.7 p.20): even if the password is stolen (phishing, data breach, reuse), access is impossible without the phone. MFA is absent in 59% of incidents (ch3.7 p.20) — its absence is the leading cause of account compromise.
+
+**2. Codes are short-lived**: the TOTP code is valid for at most ~2 minutes (current and previous window). A static password, once stolen, is valid indefinitely until changed. The timestamp component (ch3.1 p.3) ensures freshness — old codes cannot be replayed.
+
+**3. Per-session freshness** (ch3.1 p.3): T advances every 60 seconds. A code captured from a previous login is automatically invalid in subsequent windows — replay is blocked by the advancing time index.
+
+**4. Credential stuffing resistance**: the 6-digit code changes every minute; credential stuffing databases contain static passwords. A leaked password database grants no access to a TOTP-protected account.
+
+### Part 4 — Drawbacks
+
+**1. Clock synchronisation required** (ch1 p.42): code generation depends on synchronised clocks. Significant clock drift on the phone causes valid codes to be rejected — an availability problem.
+
+**2. Shared secret K stored on server**: the server holds K for every enrolled user. A breach of the server's TOTP key database allows an attacker to generate valid codes for all users indefinitely. K must be stored encrypted at rest with AES-256-GCM.
+
+**3. Device dependency**: the user must have the phone available at every login. A lost or unavailable phone blocks access. Any recovery mechanism reduces second-factor security.
+
+**4. Login friction** (ch3.2 p.14 — usability vs. security trade-off): the user must retrieve the phone at every login. For high-frequency access, this is operationally burdensome. A "remember this device for 30 days" option reduces friction at the cost of a wider exposure window if the device is stolen.
+
+### Part 5 — Remaining Vulnerabilities
+
+- **Real-time phishing (adversary-in-the-middle)**: an attacker tricks the user into logging into a fake site that proxies both the password and the TOTP code to the real server in real time — before the 60-second window expires. TLS (ch3.6 p.5) and server certificate verification prevent passive eavesdropping, but a sophisticated proxy attack can relay credentials in real time. Solution: verify the server's X.509 certificate Subject Alternative Name carefully (ch3.2 p.28).
+- **Replay within the window**: if malware on the PC captures the TOTP code before submission (ch3.7 p.43), the attacker has up to ~2 minutes to replay it. EPP on client devices (ch3.7 p.43) reduces but does not eliminate this risk.
+- **Malware keylogger**: captures both password and TOTP code as the user types them. Behaviour-based EPP (ch3.7 p.43) is the mitigation.
+- **TOTP key database breach**: if K values on the server are stolen, an attacker generates valid codes for all users. The server must encrypt TOTP secrets at rest and restrict access to the key database strictly (ch3.7 p.46).
+- **Brute force of 6-digit code space**: 10⁶ possible codes. Not brute-forceable in 60 seconds with rate limiting, but the server must enforce account lockout after repeated failures (ch3.7 p.85).
+
+### Part 6 — Summary of Design Choices
+
+| Component | Chosen Solution | Slide reference | Why better than alternatives |
+|---|---|---|---|
+| OTP generation | HMAC-SHA256 with time window index | ch2.2.3 p.63–66; ch3.1 p.3 | HMAC resists length-extension attacks; time index provides automatic expiry |
+| Password storage | SHA-512 + 96-bit salt per user | ch3.2 p.11 | Salt defeats rainbow tables; SHA-512 no known practical attack |
+| Transport | TLS 1.3, AES-256-GCM, ECDHE | ch3.6 p.7–8, p.18, p.37 | Forward secrecy; AEAD; no legacy algorithms |
+| Brute-force protection | Account lockout after threshold failures | ch3.7 p.85 | Prevents online dictionary attacks and OTP guessing |
+| MFA device delivery | QR code over TLS at enrolment | ch3.6 p.7–8 | Shared secret never exposed on open channel |
+
+### Sources
+
+- IS_UG_1_Introduction (p.10, p.15, p.22, p.34, p.42)
+- IS_UG_2_2_3_SecM_HashMac (p.63–66)
+- IS_UG_3_1_Appl_Basics (p.3, p.7)
+- IS_UG_3_2_Appl_AuthMeth (p.10–11, p.13–14)
+- IS_UG_3_6_Appl_TLS (p.5, p.7–8, p.18, p.37)
+- IS_UG_3_7_Appl_System (p.20, p.43, p.46, p.85)
+
+_Status: Complete_  
+_Done by: William_
