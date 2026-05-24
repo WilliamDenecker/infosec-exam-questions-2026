@@ -11,6 +11,8 @@ The CBC-MAC construction builds a MAC function from a block cipher by taking the
 In CBC-mode encryption, each block is XORed with the previous ciphertext block before encryption:
 $$C_0 = IV, \quad C_i = E_K(M_i \oplus C_{i-1})$$
 
+where **IV** (Initialisation Vector) is the fixed starting value that seeds the chain before the first block. For CBC-MAC, $IV = 0^{128}$ (all zeros) — a known, public constant. This ensures the MAC is deterministic and verifiable.
+
 CBC-MAC takes the last encrypted block $C_m$ as the authentication tag. This is secure because the chaining means $C_m$ depends on every plaintext block $M_1, M_2, \ldots, M_m$: any change to any block propagates through all subsequent ciphertext blocks, changing $C_m$. The MAC is a one-way function of the complete message — an attacker who changes any $M_i$ cannot produce the correct $C_m$ without the key $K$.
 
 ---

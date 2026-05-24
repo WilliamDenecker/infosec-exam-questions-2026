@@ -41,28 +41,37 @@ Each term depends on its ciphertext block and the authentication key $H$. In the
 
 ### Complexity of Operations
 
-**OCB per-block operations**:
-- Offset update: $Z_i = Z_{i-1} \oplus L[ntz(i)]$ — one XOR (trivial)
-- Encryption: $E_K(M_i \oplus Z_i)$ — one XOR + one AES block encryption
-- Ciphertext: $C_i = Z_i \oplus E_K(\ldots)$ — one XOR
+**Full operation count — OCB** ($m$ blocks):
+- $m$ AES block-cipher invocations for encryption: $E_K(M_i \oplus Z_i)$
+- $m$ XOR-with-offset operations: $C_i = Z_i \oplus E_K(\ldots)$
+- $m$ polynomial multiplications over $GF(2^{128})$ to generate offsets: $Z_i = Z_{i-1} \oplus L[ntz(i)]$, where each $L[j] = x \cdot L[j-1]$ is a multiplication by the simple polynomial $x$
+- 1 final AES call for the authentication tag $T = E_K(\text{Checksum} \oplus Z_m \oplus L\$)$
 
-Total per block: **1 AES call + 3 XOR operations**. No GF multiplication per message block.
+**Full operation count — GCM** ($m$ blocks, ch2.2.3 p.70–75):
+- $m$ AES invocations for CTR-mode encryption: $C_i = M_i \oplus E_K(IV \| i)$
+- $m$ multiplications in $GF(2^{128})$ for GHASH authentication: $Y_i = (Y_{i-1} \oplus C_i) \cdot H$
+- 1 extra AES call for the initial hash key $H = E_K(0^{128})$
+- 1 final AES call for the MAC tag
 
-**GCM per-block operations** (ch2.2.3 p.70–75):
-- Encryption: $C_i = M_i \oplus E_K(IV \| i)$ — one AES call + one XOR
-- Authentication: $G_i = (G_{i-1} \oplus C_i) \cdot H$ — one XOR + one **GF(2^{128}) multiplication**
+Both schemes thus perform $m$ AES block-cipher calls plus $m$ operations in $GF(2^{128})$. However, **the nature of the $GF(2^{128})$ operations differs fundamentally**:
 
-Total per block: **1 AES call + 2 XOR + 1 GF(2^{128}) multiplication**.
+- In **OCB**, the offset multiplications ($x \cdot L[j]$) are multiplications by the simple polynomial $x$. In $GF(2^{128})$ with irreducible polynomial $x^{128} + x^7 + x^2 + x + 1$, multiplying by $x$ reduces to a **single left-shift and a conditional XOR** with the irreducible polynomial (if the high bit was set). This is an extremely cheap operation — 2–3 instructions.
 
-GF(2^{128}) multiplication is significantly more expensive than XOR. On CPUs with CLMUL hardware instructions (Intel/AMD since ~2010), this is fast (~several cycles), but on constrained hardware lacking CLMUL it requires software emulation (dozens of operations). OCB avoids this per-block cost entirely.
+- In **GCM**, GHASH multiplications are **general field multiplications** by a fixed $H = E_K(0^{128})$. A general $GF(2^{128})$ multiplication involves 128 iterations of shift-and-XOR, or equivalently, carryless multiply (CLMUL) followed by modular reduction. This is computationally much heavier than a multiply-by-$x$.
 
-**OCB setup operations** (key-dependent, one-time): $L_* = E_K(0^{128})$, then $L_\$$, $L[0], \ldots, L[127]$ via repeated GF multiplications. This is done once per key. The GF multiplications in OCB appear only in setup, not per message block.
+**Per-block cost breakdown**:
 
-**GCM setup** (one-time): $H = E_K(0^{128})$ — one AES call. The GF multiplication for GHASH recurs per block.
+| Operation | OCB | GCM |
+|---|---|---|
+| AES call | 1 × $E_K$ | 1 × $E_K$ |
+| XOR | 3 (input mask, output mask, checksum) | 2 (CTR XOR + GHASH XOR) |
+| $GF(2^{128})$ mult | 1 × **multiply-by-$x$** (shift + cond. XOR) | 1 × **full multiply-by-$H$** (CLMUL / 128 iterations) |
 
-**Verdict — complexity**: OCB is less complex per encrypted block (no GF multiplication per block). GCM pays a GF multiplication per block for GHASH. On hardware without CLMUL acceleration, OCB is faster per block; on hardware with CLMUL the gap narrows.
+**Conclusion**: OCB's $GF(2^{128})$ operations are significantly cheaper than GCM's GHASH multiplications. OCB has a lower total computational complexity per block. On CPUs with CLMUL hardware instructions (Intel/AMD since ~2010), GCM's general multiplication is accelerated to ~a few cycles, narrowing the gap. On constrained hardware lacking CLMUL (microcontrollers, embedded systems), GCM's per-block GHASH multiplication requires software emulation (many cycles), whereas OCB's multiply-by-$x$ remains trivially cheap regardless.
 
-Additionally, OCB uses only AES encryption ($E_K$) — it never needs AES decryption ($D_K$), even when decrypting a ciphertext. Decryption reverses: $M_i = (C_i \oplus Z_i)$ then verify — the inverse operation is XOR (self-inverse), and the AES call is $E_K$ again (via $C_i = Z_i \oplus E_K(M_i \oplus Z_i)$, we get $E_K(M_i \oplus Z_i) = C_i \oplus Z_i$, but we need $M_i$ — actually for OCB decryption one uses $M_i = D_K(C_i \oplus Z_i) \oplus Z_i$). So OCB decryption does use $D_K$. However, the authentication path (Checksum verification) uses only $E_K$. A hardware implementation can potentially omit the $D_K$ circuit if only one-way use is required.
+**OCB setup operations** (key-dependent, one-time): $L_* = E_K(0^{128})$, then $L_\$$, $L[0], \ldots, L[127]$ via repeated multiply-by-$x$ operations. Done once per key — the more expensive setup pays off over many messages.
+
+**GCM setup** (one-time): $H = E_K(0^{128})$ — one AES call. No precomputed table equivalent to OCB's $L$ table; GHASH multiplications by $H$ recur per block.
 
 ---
 

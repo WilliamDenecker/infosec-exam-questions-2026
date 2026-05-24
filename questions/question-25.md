@@ -34,32 +34,39 @@ But this is exactly $CBC\text{-}MAC_K(M_{m+1})$ — the MAC of the single-block 
 
 ---
 
-### Vulnerability 2 — Prefix Attack (Different Length Messages)
+### Vulnerability 2 — Prefix Collision Attack (Different Length Messages)
 
-**Setup**: CBC-MAC is used for messages of variable length with the same key $K$.
+**Setup**: CBC-MAC is used for messages of variable length with the same key $K$. This attack requires only **one MAC query**.
 
-**Attack**: suppose the attacker obtains:
-- $T_1 = CBC\text{-}MAC_K(X)$ for some 1-block message $X$
-- $T_2 = CBC\text{-}MAC_K(X \| Y)$ for the 2-block message $X \| Y$
+**Attack** (step by step):
 
-The computation of $T_2$ starts with $T_1 = E_K(X)$, then:
-$$T_2 = E_K(Y \oplus T_1) = E_K(Y \oplus CBC\text{-}MAC_K(X))$$
+1. Attacker queries $T_A = CBC\text{-}MAC_K(A)$ for any chosen 1-block message $A$:
+$$T_A = E_K(A \oplus 0) = E_K(A)$$
 
-Now the attacker constructs:
-$$X' = X \oplus T_1$$
+2. Attacker constructs $B = T_A \oplus A$ — trivial, both values are known.
 
-Note: $CBC\text{-}MAC_K(X') = E_K(X') = E_K(X \oplus T_1) = E_K(X \oplus E_K(X))$
+3. Attacker computes $CBC\text{-}MAC_K(A \| B)$ by tracing the CBC-MAC chain:
+   - Block 1: $T_1 = E_K(A \oplus 0) = E_K(A) = T_A$
+   - Block 2: $T_2 = E_K(B \oplus T_1) = E_K\bigl((T_A \oplus A) \oplus T_A\bigr) = E_K(A) = T_A$
 
-More directly: the attacker chooses any 1-block message $A$, queries $T_A = CBC\text{-}MAC_K(A)$, and then computes:
-$$CBC\text{-}MAC_K(A \| (T_A \oplus A)) = E_K((T_A \oplus A) \oplus T_A) = E_K(A) = T_A$$
+**Result**: $CBC\text{-}MAC_K(A \| B) = T_A = CBC\text{-}MAC_K(A)$.
 
-Wait — this shows the MAC of the 2-block message $A \| (T_A \oplus A)$ equals $T_A$. So the attacker has a collision: $CBC\text{-}MAC_K(A) = CBC\text{-}MAC_K(A \| (T_A \oplus A)) = T_A$. Two messages of different lengths with the same MAC — a direct violation of MAC security.
+Two messages of **different lengths** — the 1-block message $A$ and the 2-block message $A \| B$ — produce the **exact same MAC tag**. The receiver cannot tell which message the sender intended; both are equally "authentic" under the same key.
+
+**This is strictly easier than the length extension attack** — it requires only 1 oracle query and immediately yields a collision with no additional computation.
+
+**Comparison of the two attacks**:
+
+| Attack | Queries needed | What you get |
+|---|---|---|
+| Length extension | 2 — MAC of $M$ + MAC of suffix $N$ | Valid MAC for the extended message $M \| \text{modified}\_N$ |
+| Prefix collision | 1 — MAC of any single block $A$ | Immediate collision: $MAC(A) = MAC(A \| B)$ for constructed $B$ |
 
 ---
 
 ### Root Cause
 
-The root cause is that CBC-MAC's state after processing $m$ blocks is exactly $T_m$ — the MAC value. Any entity that knows $T_m$ and a subsequent block $M_{m+1}$ can continue the chain exactly as the legitimate MAC computation would. The MAC value exposes the internal state, enabling extension. For **fixed-length** messages, this is not an issue because the adversary cannot extend a message while remaining within the fixed-length constraint.
+The root cause is that CBC-MAC's state after processing $m$ blocks is exactly $T_m$ — the MAC value itself. Any entity that knows $T_m$ and a subsequent block can continue the chain exactly as the legitimate MAC computation would. The MAC value exposes the internal state, enabling both extension and collision. For **fixed-length** messages this is not an issue because the adversary cannot submit messages of a different length.
 
 ---
 
