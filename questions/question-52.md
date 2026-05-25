@@ -92,7 +92,7 @@ In practice, crack.sh claims cracking times of **seconds to a few minutes** usin
 
 ### Practical Limitations (ch3.2 p.9–10)
 
-1. **The attack is specific to the fixed plaintext**: the rainbow table only finds keys for encryptions of "1122334455667788". If a different plaintext is encrypted with the same key, a different rainbow table (or brute-force) is required.
+1. **The attack is specific to the fixed plaintext**: every chain link is computed as $\text{DES}_K(\texttt{1122334455667788})$ — the same plaintext at every step. The table is therefore a precomputed structure for inverting the function $f(K) = \text{DES}_K(\texttt{1122334455667788})$ specifically. To use it, you must have a ciphertext $C = \text{DES}_K(\texttt{1122334455667788})$ — i.e., you must know that the target key was used to encrypt exactly that message. If a different plaintext $P'$ was encrypted under the same key, the cracking algorithm would still apply $\text{DES}(\texttt{1122334455667788})$ at each step (because that is what the chains were built with), producing a completely unrelated sequence of values with no connection to $C' = \text{DES}_K(P')$. A separate rainbow table built with plaintext $P'$ would be required. Note: once $K$ is recovered (from a ciphertext of the fixed plaintext), all other ciphertexts under the same key can be decrypted directly — but finding $K$ in the first place requires the matching plaintext-ciphertext pair.
 
 2. **No salt in DES**: standard DES (not the crypt(3) modified version) uses no salt — the same plaintext always gives the same ciphertext under the same key. This is what makes the rainbow table viable. Unix crypt(3) uses a 12-bit salt, which would require $2^{12} = 4096$ separate rainbow tables (ch3.2 p.9 notes).
 

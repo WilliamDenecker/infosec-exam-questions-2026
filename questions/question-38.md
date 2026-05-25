@@ -57,89 +57,75 @@ The Merkle tree pays ~2× more total hash calls but achieves logarithmic paralle
 
 ### Part 2 — Second Preimage Attack When Depth $n$ Is Unknown (ch2.2.3 p.13, p.83–84)
 
-**The vulnerability**: if the tree depth $n$ is not fixed or not included in the hash computation, the Merkle tree is vulnerable to a **tree-lifting attack** (also known as a second-preimage attack exploiting tree structure).
+**The core insight**: without knowing $n$, a verifier cannot tell whether a root hash came from a deep tree over many small blocks, or a shallow tree over fewer larger blocks. The attacker exploits this by presenting a *different* message that happens to produce the *same* root hash.
 
-**Attack to find $T' \neq T$ with $H_{MT}(T') = H_{MT}(T)$**:
+---
 
-Consider the hash tree for $T = T_0 \| T_1 \| T_2 \| T_3$ at depth $n = 2$. The tree produces:
+**Step 1 — Build the original tree for $T = T_0 \| T_1 \| T_2 \| T_3$ at depth $n = 2$**:
+
 ```
 Level 0: h_{0,0} = H(T_0),  h_{0,1} = H(T_1),  h_{0,2} = H(T_2),  h_{0,3} = H(T_3)
 Level 1: h_{1,0} = H(h_{0,0} || h_{0,1}),  h_{1,1} = H(h_{0,2} || h_{0,3})
-Level 2: h_{2,0} = H(h_{1,0} || h_{1,1})  ← root
+Level 2: h_{2,0} = H(h_{1,0} || h_{1,1})   ← this is the root, H_MT(T)
 ```
 
-Now construct $T'$ as a **message of 2 blocks** at depth $n' = 1$:
-$$T' = T_0' \| T_1' \quad \text{where} \quad T_0' = h_{1,0}, \quad T_1' = h_{1,1}$$
+The root is $h_{2,0}$. Notice its definition: it is $H$ applied to the two level-1 nodes concatenated together — $H(h_{1,0} \| h_{1,1})$.
 
-The Merkle tree of $T'$ at depth $n' = 1$:
-- Level 0: $h_{0,0}' = H(T_0') = H(h_{1,0})$, $h_{0,1}' = H(T_1') = H(h_{1,1})$
-- Wait — these are not the same as $h_{1,0}$ and $h_{1,1}$ (those are themselves hash values)
+---
 
-Let me use the simpler direct "lifting" attack:
+**Step 2 — What does a depth-0 Merkle tree look like?**
 
-Consider $T' = h_{1,0} \| h_{1,1}$ as a 2-block message (depth $n' = 1$):
-- $h_{0,0}' = H(h_{1,0})$... this is not $h_{1,0}$
+A depth-0 tree has $2^0 = 1$ block. The definition says leaves are hashed as $h_{0,i} = H(T_i)$, and the root is $h_{0,0}$. With only one block there are no internal nodes at all — the root is simply:
+$$H_{MT}(T') = H(T_0')$$
+That is: hash the one block, done.
 
-The correct attack is more direct: **set $T'$ to be a 2-block message where the two "blocks" are exactly the level-1 internal nodes**:
+---
 
-If we treat $h_{1,0}$ and $h_{1,1}$ as the direct leaf data blocks of a depth-1 Merkle tree:
-- $T_0' = h_{1,0}$, $T_1' = h_{1,1}$ — these are the blocks of $T'$
-- Level-0 leaf hashes: $H(h_{1,0})$ and $H(h_{1,1})$ — NOT the same as $h_{1,0}$ and $h_{1,1}$
+**Step 3 — Construct the forged message $T'$**
 
-This does not work directly. The simpler attack:
+Choose $T'$ to be a single block whose *content* is the two level-1 nodes from the original tree pasted together:
+$$T_0' = h_{1,0} \| h_{1,1}$$
 
-**Second preimage from tree node values**:
-The depth-2 Merkle tree of $T$ includes internal nodes $h_{1,0}$ and $h_{1,1}$. If we define a depth-1 Merkle tree over $T' = T_0' \| T_1'$ where $T_0'$ is any block that hashes to $h_{1,0}$ and $T_1'$ is any block that hashes to $h_{1,1}$... this requires finding preimages.
+This is just a string of bits — specifically the concatenation of two hash outputs that the attacker can read off from the original tree (they are not secret).
 
-**The actual simple attack**: define $T'$ as a **1-block message** at depth 0: $T' = h_{2,0}$ (the root hash value itself as a 1-block message). With depth $n' = 0$: $H_{MT}(T') = h_{0,0}' = H(h_{2,0}) = H(H_{MT}(T))$. This is not the same as $H_{MT}(T)$ unless $H_{MT}(T) = H(H_{MT}(T))$ — which is generally false.
+---
 
-**The correct tree-lifting attack** (standard result for Merkle trees without depth encoding):
+**Step 4 — Compute $H_{MT}(T')$ and watch why it equals $H_{MT}(T)$**
 
-Define $T'$ to be a message with $2^{n+1}$ blocks such that the first $2^n$ blocks of $T'$ are $h_{0,0}, h_{0,1}, \ldots, h_{0,2^n-1}$ (the leaf hash values of the original tree $T$), and the last $2^n$ blocks can be arbitrary. Wait — this doesn't work either.
+Since $T'$ is a depth-0 tree with one block $T_0'$:
+$$H_{MT}(T') = H(T_0')$$
 
-**The true attack**: define $T'$ with **$2^{n-1}$ blocks** at depth $n' = n-1$, where the block $T_0' = h_{1,0}$ and $T_1' = h_{1,1}$ (for $n = 2$). But these are $|H|$-bit values (hash output length), while blocks are typically larger.
+Substitute what $T_0'$ actually is (the choice we made in Step 3):
+$$= H(h_{1,0} \| h_{1,1})$$
 
-**Simplified correct attack for unknown $n$**:
+But look at the original tree in Step 1 — $h_{2,0}$ was defined as exactly this:
+$$= h_{2,0}$$
 
-Take $T' = h_{1,0} \| h_{1,1}$ as a 2-block message and compute $H_{MT}$ as if depth $= 1$:
-- Actually, the tree-lifting attack sets $T_i' = h_{n-1, i}$ (the level-$n-1$ nodes of the original tree as the leaf "blocks" of a shallower tree)
-- Leaf hashes at depth $n-1$ for $T'$: $H(T_i') = H(h_{n-1,i})$ — not equal to $h_{n-1,i}$ in general
+And $h_{2,0}$ is the root of the original tree, i.e. $H_{MT}(T)$:
+$$= H_{MT}(T) \checkmark$$
 
-The attack only works if we treat internal hash **values** directly as leaf **data** — i.e., if blocks and hash outputs have the same length (they do, for standard hash functions: SHA-256 produces 256-bit outputs matching typical block sizes — but "blocks" here are message blocks, not hash-output sized chunks).
+There is no cryptographic trick here. The equalities follow purely from definitions:
+- The first equality is the definition of how a depth-0 tree works
+- The second equality is just substituting the choice we made for $T_0'$
+- The third equality is the definition of $h_{2,0}$ from the original tree
 
-In practice: for a Merkle tree without depth encoding, define $T' = (h_{0,0} \| h_{0,1} \| \ldots \| h_{0,2^n-1})$ — a message of $2^n$ blocks where block $i$ of $T'$ is the leaf hash of block $i$ of $T$. Then the Merkle tree of $T'$ at depth $n$ produces leaf hashes $H(h_{0,i})$ — which is level 1 of a depth-$(n+1)$ tree. This does not immediately give a second preimage.
+The root of the depth-2 tree is $H(\text{two level-1 nodes})$. A depth-0 tree over one block $B$ computes $H(B)$. Both are the same hash call — so choosing $B = h_{1,0} \| h_{1,1}$ makes them identical.
 
-**The standard result for the attack** (from Merkle tree security literature):
-Take $T'$ as the concatenation of the $2^{n-1}$ level-1 nodes, treated as leaf blocks of a depth-$(n-1)$ tree:
-$$T' = h_{1,0} \| h_{1,1} \| \ldots \| h_{1, 2^{n-1}-1}$$
-Then $H_{MT}^{(n-1)}(T') = H(h_{1,0} \| h_{1,1}) $ ... wait, this uses depth $n-1$, which gives $2^{n-1}$ leaf blocks. The computation:
-- Level 0 leaves: $H(h_{1,0})$, $H(h_{1,1})$, ..., $H(h_{1, 2^{n-1}-1})$ — NOT equal to $h_{1,i}$.
+---
 
-**This attack works if the internal node values ARE directly used as leaf data without re-hashing**. Such a Merkle variant exists but the standard recursive definition does hash leaves. The correct statement for the standard definition:
+**$T' \neq T$**: $T'$ is a single block of two concatenated hash values ($\approx 512$ bits for SHA-256); $T$ consists of four arbitrary data blocks. Completely different messages, same root hash.
 
-**The second preimage attack requires**: treat internal nodes at level 1 ($h_{1,0}, \ldots, h_{1, 2^{n-1}-1}$) as the raw leaf blocks of a depth-$(n-1)$ Merkle tree, where the leaf hashes are defined directly as $h_{1,i}$ without applying $H$ to them — i.e., bypass the leaf hashing step. This is the "length extension" style attack on Merkle trees: if the scheme doesn't distinguish leaf nodes from internal nodes, a subtree can be substituted.
+**Why depth must be known**: if the verifier knows $n = 2$, they immediately reject $T'$ (it has one block, not $2^2 = 4$). Without $n$, the root hash alone is identical — there is no way to tell which message was originally signed.
 
-**Simple valid attack**: For a Merkle tree where **leaves are hashed the same way as internal nodes**, and depth is unknown: let $T' = (h_{1,0}, h_{1,1})$ be a 2-block message (where each "block" is a hash-output-length string). Compute $H_{MT}^{(n'=1)}(T')$:
-- Level 0: $h_{0,0}' = H(h_{1,0})$, $h_{0,1}' = H(h_{1,1})$ — NOT $h_{1,0}$ and $h_{1,1}$
-This still doesn't give the same root unless $H$ is the identity, which it isn't.
-
-**The attack only works if there is NO SEPARATION between leaf and internal node hashing**. The standard fix (described below) addresses this.
-
-For the purposes of this answer: **the second preimage attack** on a Merkle tree without depth or node-type encoding exploits the ability to construct a shorter tree whose root equals an internal node of the original tree. Specifically, if we define $T'$ to consist of $2^{n-1}$ "blocks" where block $i$ is the **raw value** $h_{1,i}$ (treating level-1 nodes as data blocks, and computing leaves of $T'$ as $H(h_{1,i})$... no, same problem.
-
-**Clean statement of the standard attack**: $T' = $ single-block message consisting of the concatenation of $h_{1,0}$ and $h_{1,1}$ at depth 0: $H_{MT}^{(0)}(T') = H(h_{1,0} \| h_{1,1}) = h_{2,0} = H_{MT}(T)$. **Yes! This works.**
-
-- The original $T$ has $2^n = 4$ blocks at depth $n = 2$, root $h_{2,0} = H(h_{1,0} \| h_{1,1})$.
-- Define $T'$ as a **single block** $T_0' = h_{1,0} \| h_{1,1}$ at depth $n' = 0$.
-  - $H_{MT}^{(0)}(T') = h_{0,0}' = H(T_0') = H(h_{1,0} \| h_{1,1}) = h_{2,0} = H_{MT}(T)$. ✓
-
-If depth is not given (so the receiver cannot tell whether the tree has depth 0 or depth 2), the sender can present $T' = (h_{1,0} \| h_{1,1})$ as a depth-0 (single-block) Merkle tree and claim it has the same hash as $T$. It does: $H_{MT}(T') = H_{MT}(T) = h_{2,0}$.
-
-**$T' \neq T$** since $T'$ consists of one block equal to 256 bits (two concatenated SHA-256 hashes) while $T$ consists of four data blocks of arbitrary size.
+---
 
 **Extra — How to Fix It**:
 
-Include the **depth** $n$ or the **number of leaf blocks** $2^n$ in the Merkle tree computation — either as a prefix hashed into the root, or by using **domain separation**: when hashing a leaf, prepend a leaf tag (e.g., $0x00$): $h_{0,i} = H(0x00 \| T_i)$; when hashing an internal node, prepend an internal tag (e.g., $0x01$): $h_{j+1,i} = H(0x01 \| h_{j,2i} \| h_{j,2i+1})$. This prevents a leaf value from being confused with an internal node value, defeating the attack.
+Use **domain separation** — hash leaves and internal nodes differently by prepending a tag:
+$$h_{0,i} = H(\texttt{0x00} \| T_i) \quad \text{(leaf node)}$$
+$$h_{j+1,i} = H(\texttt{0x01} \| h_{j,2i} \| h_{j,2i+1}) \quad \text{(internal node)}$$
+
+The attack fails because the forged $T'$ would be processed as a leaf: $H(\texttt{0x00} \| h_{1,0} \| h_{1,1})$. But the original root was computed as an internal node: $H(\texttt{0x01} \| h_{1,0} \| h_{1,1})$. Different tag → different input → different hash output. An internal node value can never produce the same hash as a leaf containing the same bytes.
 
 ---
 

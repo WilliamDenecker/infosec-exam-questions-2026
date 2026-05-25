@@ -8,30 +8,50 @@ It is possible to speed up the computation of an RSA digital signature using the
 
 ### RSA-CRT Digital Signature (ch2.2.3 p.80–84)
 
-**Standard RSA signing**: compute $\sigma = m^d \bmod n$, where $n = p \cdot q$ is the RSA modulus and $d$ is the private exponent. The exponent $d$ is approximately $|n|$ bits long (e.g., 2048 bits). This requires approximately $1.5 \cdot |n|$ modular multiplications using square-and-multiply.
+#### How CRT Works
 
-**RSA-CRT signing** (ch2.2.3 p.80): use the Chinese Remainder Theorem to compute the signature modulo $p$ and $q$ separately, then combine:
+**Standard RSA signing** computes $\sigma = m^d \bmod n$ directly — one big exponentiation modulo the full $|n|$-bit modulus with a $|n|$-bit exponent.
 
-1. Compute $\sigma_p = m^{d_p} \bmod p$, where $d_p = d \bmod (p-1)$
-2. Compute $\sigma_q = m^{d_q} \bmod q$, where $d_q = d \bmod (q-1)$
-3. Combine with CRT: $\sigma = CRT(\sigma_p, \sigma_q)$ — a single fast combination step
+**RSA-CRT signing** (ch2.2.3 p.80) exploits the factorisation $n = p \cdot q$. By Fermat's little theorem, for any prime $p$ and $\gcd(m, p) = 1$:
+$$m^{p-1} \equiv 1 \pmod{p}$$
+Therefore $m^d \equiv m^{d \bmod (p-1)} \pmod{p}$ — we only need the exponent reduced modulo $p-1$, not the full $d$. This gives:
 
-**Speed-up**: each of $p$ and $q$ is approximately $|n|/2$ bits (for $n = pq$ balanced). The exponents $d_p$ and $d_q$ are also $|n|/2$ bits long. Each modular exponentiation mod $p$ (or mod $q$) requires approximately $1.5 \cdot |n|/2$ modular multiplications with operands of size $|n|/2$ bits.
+1. $\sigma_p = m^{d_p} \bmod p$ where $d_p = d \bmod (p-1)$ — exponentiation modulo the **half-size** prime $p$
+2. $\sigma_q = m^{d_q} \bmod q$ where $d_q = d \bmod (q-1)$ — exponentiation modulo the **half-size** prime $q$
+3. **CRT recombination** (Garner's algorithm): find $\sigma$ such that $\sigma \equiv \sigma_p \pmod{p}$ and $\sigma \equiv \sigma_q \pmod{q}$:
+$$\sigma = \sigma_q + q \cdot \bigl[q^{-1} \bmod p\bigr] \cdot (\sigma_p - \sigma_q) \bmod n$$
+This is a handful of multiplications modulo $n$ — negligible cost.
 
-The cost of one modular multiplication modulo $p$ (a $|n|/2$-bit modulus) is approximately $(|n|/2)^2$ bit operations. The cost of one multiplication modulo $n$ (a $|n|$-bit modulus) is approximately $|n|^2$ bit operations — a factor of 4 more expensive.
+The combined $\sigma$ is guaranteed to equal $m^d \bmod n$ by the Chinese Remainder Theorem (since $\sigma$ satisfies the correct residues mod both $p$ and $q$, and $\gcd(p,q)=1$).
 
-**Total cost with CRT**:
-- 2 exponentiations, each with $\approx 1.5 \cdot |n|/2$ multiplications, each costing $(|n|/2)^2$:
-  $$\text{Cost}_{CRT} \approx 2 \cdot 1.5 \cdot \frac{|n|}{2} \cdot \left(\frac{|n|}{2}\right)^2 = 2 \cdot 1.5 \cdot \frac{|n|^3}{8} = \frac{1.5 \cdot |n|^3}{4}$$
+---
 
-**Total cost without CRT**:
-- 1 exponentiation with $\approx 1.5 \cdot |n|$ multiplications, each costing $|n|^2$:
-  $$\text{Cost}_{standard} \approx 1.5 \cdot |n| \cdot |n|^2 = 1.5 \cdot |n|^3$$
+#### Why CRT Gives Exactly 4× Speed-Up
 
-**Speed-up factor**:
-$$\text{Speed-up} = \frac{\text{Cost}_{standard}}{\text{Cost}_{CRT}} = \frac{1.5 \cdot |n|^3}{\frac{1.5 \cdot |n|^3}{4}} = 4$$
+Let $b = \log_2 n = |n|$ denote the **bit-length** of the modulus $n$. The cost of modular exponentiation scales as $O(b^3)$:
+- The square-and-multiply algorithm performs $\approx 1.5\,b$ modular multiplications (one squaring per bit, one extra multiply per 1-bit on average)
+- Each modular multiplication modulo a $b$-bit number costs $\propto b^2$ bit operations (schoolbook multiplication)
+- **Total cost**: $\propto 1.5 \cdot b \cdot b^2 = 1.5\,b^3$
 
-RSA-CRT signing is approximately **4× faster** than standard RSA signing.
+**What is the bit-length of $p$?** Since $n = p \cdot q$ with $p \approx q \approx \sqrt{n}$, the primes satisfy:
+
+$$\log_2 p \approx \log_2 \sqrt{n} = \tfrac{1}{2}\log_2 n = \frac{b}{2}$$
+
+So $p$ has bit-length $b/2$ — **half the bit-length of $n$**. Note this is NOT $\log_2(n/2) = b - 1$ (which would be halving the number itself and barely reduces cost). The CRT substitution replaces $b$ with $b/2$.
+
+Substituting $b/2$ into the cost formula:
+
+$$\text{Cost per sub-exp} = 1.5 \cdot \frac{b}{2} \cdot \left(\frac{b}{2}\right)^2 = 1.5 \cdot \frac{b}{2} \cdot \frac{b^2}{4} = \frac{1.5\,b^3}{8}$$
+
+Each half-size exponentiation is $8\times$ cheaper. The factor of $8 = 2^3$ comes directly from the cubic $O(b^3)$ scaling: halving $b$ reduces cost by $2^3$.
+
+However, CRT requires **both** $S_p$ and $S_q$, so you perform two such sub-exponentiations:
+
+$$\text{Cost}_{CRT} = 2 \times \frac{1.5\,b^3}{8} = \frac{1.5\,b^3}{4}$$
+
+$$\text{Speed-up} = \frac{1.5\,b^3}{\dfrac{1.5\,b^3}{4}} = 4$$
+
+The theoretical $8\times$ per sub-exp is halved because two sub-exps are needed — giving a **4× net speedup**.
 
 ---
 
@@ -73,10 +93,28 @@ If verification fails, the signature is discarded and recomputed — at the cost
 
 **Verification** consists of computing $\sigma^e \bmod n$ — an RSA public key operation with exponent $e$.
 
-The public exponent $e = 65537 = 2^{16} + 1$ has a very specific bit structure: in binary it is $1\underbrace{00\ldots0}_{15}1$ — exactly 2 bits set to 1. Using square-and-multiply:
-- 16 squarings (for the 16-bit shift from the leading 1 to the trailing 1)
-- 1 multiplication (for the trailing 1 bit)
-- Total: **17 modular multiplications** modulo $n$ (full $|n|$-bit modulus)
+**Deriving the 17 multiplications for $e = 65537$**:
+
+The square-and-multiply algorithm computes $x^e$ by scanning the bits of $e$ from left to right. The rule is simple:
+- **Every bit**: square the running result (doubles the exponent)
+- **If the bit is 1**: also multiply by $x$ (adds 1 to the exponent)
+
+Why does this work? Squaring doubles the current exponent, and multiplying by $x$ increments it by 1 — so reading the binary representation left to right builds up $e$ bit by bit, exactly like shifting a binary number left and optionally setting the last bit.
+
+Now apply this to $e = 65537 = 2^{16} + 1$, whose binary representation is:
+
+$$e = \underbrace{1}_{}\underbrace{000000000000000}_{15\ \text{zeros}}\underbrace{1}_{}$$
+
+- **Start**: result $= x$ (the leading 1-bit sets the initial value)
+- **Next 15 bits are all 0**: square 15 times, no multiplications needed
+  $$x \to x^2 \to x^4 \to \cdots \to x^{2^{15}} = x^{32768}$$
+- **Final bit is 1**: square once more, then multiply by $x$
+  $$x^{32768} \xrightarrow{\text{square}} x^{65536} \xrightarrow{\times\, x} x^{65537}$$
+
+Total operations:
+- 15 squarings (for the 15 zero bits)
+- 1 squaring + 1 multiplication (for the final 1-bit)
+- **Total: 16 squarings + 1 multiplication = 17 modular multiplications** modulo $n$
 
 This is negligible compared to either the standard or CRT signature computation ($\approx 1.5 \cdot |n|$ multiplications).
 
